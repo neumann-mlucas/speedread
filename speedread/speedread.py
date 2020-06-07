@@ -2,40 +2,87 @@
 
 import argparse
 import subprocess
+from itertools import accumulate
 import tkinter as tk
 
 
 class SpeedRead(tk.Frame):
-    def __init__(self, master=None, wpm=300, label_config={}):
+    def __init__(
+        self, master=None, wpm=300, clipboard_get=None, big_label={}, small_label={},
+    ):
         super().__init__(master)
         self.master = master
+
+        # FUTURE: PUT BINDS INTO A FUNCTION
+
+        # Go forward and backward in words
+        self.master.bind("<Key-l>", self.next_word)
+        self.master.bind("<Left>", self.next_word)
+        self.master.bind("<Key-h>", self.previous_word)
+        self.master.bind("<Right>", self.previous_word)
+        # Increase and decrease wpm
+        self.master.bind("<Key-k>", self.inc_wpm)
+        self.master.bind("<Up>", self.inc_wpm)
+        self.master.bind("<Key-j>", self.dec_wpm)
+        self.master.bind("<Down>", self.dec_wpm)
+        # Exit program
+        self.master.bind("<KeyRelease-q>", quit)
+        self.master.bind("<KeyRelease-Q>", quit)
+
         self.pack()
-        # get word list from clipboard
-        words = split_text(xsel_get())
-        times = calc_times(words, wpm)
-        self.words = zip(words, times)
+
+        self.wpm = wpm
+        self.words = split_text(clipboard_get())
+        self.length = len(self.words) if self.words else 1
+        self.index = 0
+
         # write first word to window
-        start = format_word(words[0]) if words else ("Empty Clipboard")
-        self.text = tk.Label(self, text=start, **label_config)
+        start = format_word(self.words[0]) if self.words else ("Empty Clipboard")
+        self.text = tk.Label(self, text=start, **big_label)
         self.text.pack()
+
+        # write info
+        start = format_info(0, self.length, self.wpm)
+        self.info = tk.Label(self, text=start, **small_label)
+        self.info.pack()
+
         # wait a little and start updating
-        self.after(1000, self.update)
+        self.after(500, self.update)
 
     def update(self):
-        # Update text until generator is consumed
+        # Increase index and Update text until get IndexError
         try:
-            word, time = next(self.words)
+            idx, wpm = self.index, self.wpm
+            word = self.words[idx]
+
+            info = format_info(idx, self.length, wpm)
+            time = time_per_word(word, wpm)
             word = format_word(word)
+
+            self.index += 1
+
+            self.info.configure(text=info)
             self.text.configure(text=word)
             self.after(time, self.update)
-        except StopIteration:
-            self.after(2500, self.quit)
 
-    def quiet():
-        self.destroy()
+        except IndexError:
+            self.after(1000, self.quit)
+
+    def next_word(self, event=None):
+        self.index += 2
+
+    def previous_word(self, event=None):
+        self.index -= 2
+
+    def inc_wpm(self, event=None):
+        self.wpm += 10
+
+    def dec_wpm(self, event=None):
+        self.wpm -= 10
 
 
 def parse_args():
+
     parser = argparse.ArgumentParser(
         prog="SpeedRead",
         description="""Speed reader python package. Reads clipboard
@@ -47,64 +94,112 @@ def parse_args():
     parser.add_argument(
         "-w", "--wpm", action="store", default=300, type=int, help="Words per Minute",
     )
+
+    parser.add_argument(
+        "-xclip",
+        "--xclip",
+        action="store_true",
+        default=False,
+        help="Use output from xclip -o",
+    )
+    parser.add_argument(
+        "-xsel",
+        "--xsel",
+        action="store_true",
+        default=False,
+        help="Use output from xsel",
+    )
+    parser.add_argument(
+        "-cb",
+        "--clipboard",
+        action="store_true",
+        default=True,
+        help="Use clipboard content",
+    )
     args = parser.parse_args()
+
+    if args.xclip:
+        args.clipboard_get = xclip_get
+    elif args.xsel:
+        args.clipboard_get = xsel_get
+    else:
+        args.clipboard_get = tkinter_get
+
     return args
 
 
-def clipboard_get():
+def tkinter_get():
     root = tk.Tk()
     root.withdraw()
     clip = root.clipboard_get()
-    return clip
+    # must return a regular string
+    return clip.decode("utf-8") if isinstance(clip, bytes) else clip
+
+
+def xclip_get():
+    proc = subprocess.Popen(["xclip", "-out"], stdout=subprocess.PIPE)
+    clip = proc.stdout.read()
+    # must return a regular string
+    return clip.decode("utf-8") if isinstance(clip, bytes) else clip
 
 
 def xsel_get():
     proc = subprocess.Popen("xsel", stdout=subprocess.PIPE)
     clip = proc.stdout.read()
-    return clip
+    # must return a regular string
+    return clip.decode("utf-8") if isinstance(clip, bytes) else clip
 
 
 def split_text(text):
-    return [word.decode("utf-8") for word in text.split() if word]
+    return [word for word in text.split() if word]
 
 
-def time_per_word(word, base_time):
-    # the mean length of a English word is 5.1
-    lenght_factor = 1 / 5.1
+def time_per_word(word, wpm, lenght_factor=0.196):
+    # the mean length of a English word is 5.1 (or  1 / 0.196)
+    base_time = int(60_000 / wpm)
     coefficient = len(word) * lenght_factor
     # shouldn't return a value smaller than base_time
     return int(coefficient * base_time) if coefficient > 1 else base_time
 
 
-def calc_times(words, wpm):
-    # map function requires arguments of the same length
-    base_time = int(1000 * 60 / wpm)
-    base_times = [base_time] * len(words)
-    return map(time_per_word, words, base_times)
-
-
-def format_word(word, text_config={}):
-    middle = len(word) // 2
+def format_word(word):
     return f"|\n {word} \n|"
+
+
+def format_info(idx, total, wpm):
+    porcentage = f"{100 * idx / total:5.0f}"
+    # return f" WPM : {wpm} {' '*158} {porcentage}% "
+    bar = "-" * 76
+    return f"{bar}\n WPM : {wpm} {' ' * 58} {porcentage}% "
 
 
 def main():
 
-    args = parse_args()
-
-    label_config = {
+    big_label = {
         "bg": "#2F343F",
-        "height": 8,
-        "width": 24,
+        "height": 4,
+        "width": 32,
         "fg": "#E52B50",
-        "font": ("Helvetica", "32"),
+        "font": ("Helvetica", "32", "bold"),
     }
 
-    root = tk.Tk(className="SpeedRead")
-    root.bind("<KeyRelease-q>", quit)
-    root.bind("<KeyRelease-Q>", quit)
+    small_label = {
+        "bg": "#2F343F",
+        "fg": "#E52B50",
+        "height": 2,
+        "font": ("Monospace", "12"),
+    }
 
-    app = SpeedRead(master=root, wpm=args.wpm, label_config=label_config)
+    args = parse_args()
+    root = tk.Tk(className="SpeedRead")
+
+    app = SpeedRead(
+        master=root,
+        wpm=args.wpm,
+        clipboard_get=args.clipboard_get,
+        big_label=big_label,
+        small_label=small_label,
+    )
     app.mainloop()
 
 
