@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="speedread",
-    version="0.1",
+    version="0.2",
     author="Lucas Stefan Minuzzi Neumann",
     author_email="neumannmlucas@gmail.com",
     description="Speed reader in python",
